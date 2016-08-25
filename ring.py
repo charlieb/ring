@@ -3,7 +3,7 @@ from random import choice, random, randrange
 import tkinter as tk
 import numpy as np
 from numba import jitclass, int64, float64
-
+import svgwrite
 
 spec = [('npoints', int64),
         ('points', float64[:,:]),
@@ -22,8 +22,8 @@ class SoftRingAnimator():
         self.insert_counter = 0
         self.connections = np.zeros((self.array_len,2), dtype=np.int64)
         self._ring(5*self.npoints / (2*pi), 300, 300)
-        self.repel_dist = 10
-        self.attr_dist = 2
+        self.repel_dist = 5
+        self.attr_dist = 3
 
     def _ring(self, radius, xpos, ypos):
         angles = []
@@ -60,17 +60,9 @@ class SoftRingAnimator():
 
         self.npoints += 1
 
-    def walk(self):
-        visited = []
-        n = 0
-        while n not in visited:
-            visited.append(n)
-            n = self.connections[n][0]
-        print("Visited %i / %i"%(len(visited), self.npoints))
-
     def iterate(self):
         self.insert_counter += 1
-        if self.insert_counter == 10:
+        if self.insert_counter == 1:
             self.insert()
             self.insert_counter = 0
 
@@ -96,9 +88,9 @@ class SoftRingAnimator():
                 
             if attr_acc[0] + attr_acc[1] != 0.0:
                 attr_acc /= np.sqrt(attr_acc[0]*attr_acc[0] + attr_acc[1]*attr_acc[1])
-                repel_acc[0] = repel_acc[1] = 0.0
+                #repel_acc[0] = repel_acc[1] = 0.0
 
-            self.points[i1] += 0.05 * (attr_acc + repel_acc)
+            self.points[i1] += 0.5 * (attr_acc + repel_acc)
 
 
 class UI:
@@ -106,6 +98,7 @@ class UI:
 
         self.animator = animator
         master = tk.Tk()
+
 
         self.w = tk.Canvas(master, width=600, height=600)
         self.w.pack()
@@ -115,7 +108,7 @@ class UI:
 
         self.w.create_rectangle(50, 25, 150, 75, fill="blue")
         
-        self.w.after(0,lambda: self.update(100))
+        self.w.after(0,lambda: self.update(500))
 
         tk.mainloop()
         
@@ -134,6 +127,43 @@ class UI:
                                fill='black')
 
 
+class SVG:
+    def __init__(self, animator):
+      self.animator = animator
+      self.frames = 0
+        
+    def update(self, iterations):
+        for _ in range(iterations):
+            self.animator.iterate()
+        self.draw()
+
+    def walk(self):
+        visited = []
+        n = 0
+        yield(n)
+        while n not in visited:
+            visited.append(n)
+            n = self.animator.connections[n][0]
+            yield(n)
+
+    def walk_coords(self):
+      return ((self.animator.points[n][0], self.animator.points[n][1]) for n in self.walk())
+
+    def path(self):
+      return ((('M',) if i == 0 else ()) + p for i,p in enumerate(self.walk_coords()))
+
+    def draw(self):
+        dwg = svgwrite.Drawing('test%05i.svg'%self.frames, profile='tiny')
+        path = svgwrite.path.Path(self.path())
+        path.push('Z')
+        path.stroke('black', width=1)
+        dwg.add(path)
+        dwg.save()
+
 if __name__ == '__main__':
-    UI(SoftRingAnimator(10, 5000))
+    #UI(SoftRingAnimator(10, 5000))
+    svg = SVG(SoftRingAnimator(10, 5000))
+    svg.update(1000)
+
+
 
