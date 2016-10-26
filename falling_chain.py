@@ -7,25 +7,28 @@ import svgwrite as svg
 X = 0
 Y = 1
 R = 2
+M = 3 # movement - used to track how much they shift so they can be disabled
 default_radius = 2.
+
 
 constrain_circular = 1
 constrain_rect = 2
-@jit((int64, float64[:,:], int64, float64[:]))
-def constrain(npoints, points, mode, constrain_data):
+@jit((int64, float64[:,:], int64), nopython=True)
+def constrain(npoints, points, mode):
     for i in range(npoints):
         p = points[i]
         if mode == constrain_circular:
-            cx,cy,r = constrain_data[0], constrain_data[1], constrain_data[2]
-            dx = p[0] - cx
-            dy = p[1] - cy
+            cx,cy,r = 0.,0.,100.
+            dx = p[X] - cx
+            dy = p[Y] - cy
             dmag = dx*dx + dy*dy 
             if (dmag > r*r):
                 dmag = sqrt(dmag)
-                p[0] = cx + r * dx / dmag
-                p[1] = cy + r * dy / dmag
+                p[X] = cx + r * dx / dmag
+                p[Y] = cy + r * dy / dmag
+                #p[M] = 0 # fix points that have been constrained
 
-
+@jit(int64(int64, float64[:,:], float64[:]), nopython=True)
 def insert(npoints, points, starting_coords):
     points[npoints] = starting_coords
     npoints += 1
@@ -33,7 +36,8 @@ def insert(npoints, points, starting_coords):
 
 interpenetration_margin = 0.2
 max_tries = 100
-@jit((int64, float64[:]))
+disable_threshold = 0.01
+@jit((int64, float64[:,:]))#, nopython=True)
 def iterate(npoints, points):
     exclusion_complete = False
     tries = 0
@@ -43,6 +47,10 @@ def iterate(npoints, points):
 
         for i1 in range(npoints):
             for i2 in range(i1+1, npoints):
+                if points[i1][M] < disable_threshold and points[i2][M] < disable_threshold:
+                    #print('.', end='')
+                    continue
+
                 delta = points[i1][:R] - points[i2][:R]
                 d = sqrt(np.sum(delta**2))
                 # neighbours should be exactly 2R appart - they never will be so
@@ -50,27 +58,47 @@ def iterate(npoints, points):
                 # non-neighbours >= 2R
                 if abs(i1 - i2) == 1 or d < points[i1][R] + points[i2][R]:
                         m = d - (points[i1][R] + points[i2][R])
-                        points[i1][:R] -= (delta / d) * m / 2.
-                        points[i2][:R] += (delta / d) * m / 2.
+                        mv = (delta / d) * m / 2.
+                        m = abs(m)
+                        if points[i1][M] < disable_threshold:
+                            points[i2][:R] += mv * 2.
+                            if tries == 1 and abs(i1 - i2) != 1:
+                                points[i2][M] = m
+                        elif points[i2][M] < disable_threshold:
+                            points[i1][:R] -= mv
+                            if tries == 1 and abs(i1 - i2) != 1:
+                                points[i1][M] = m
+                        else:
+                            points[i1][:R] -= mv
+                            points[i2][:R] += mv
+                            if tries == 1 and abs(i1 - i2) != 1:
+                                points[i1][M] = m
+                                points[i2][M] = m
 
-                        if abs(m) > interpenetration_margin:
+                        # record movement
+
+                        if m > interpenetration_margin:
                             exclusion_complete = False
 
 
 from shapely.geometry import Point, Polygon, LinearRing, LineString
 
-@jit(int64(int64, int64, float64[:]))
+@jit(int64(int64, int64, float64[:,:]))#, nopython=True)
 def run(iterations, npoints, points):
     jitter_size = 0.01
     
     stall = 1000
     stall_count = 0
+    start = np.array([0,-90])
     
     while npoints < iterations:
-        npoints = insert(npoints, points, [random() * jitter_size, random() * jitter_size, default_radius])
+        #npoints = insert(npoints, points, [random() * jitter_size, random() * jitter_size, default_radius])
+        npoints = insert(npoints, points, np.array([start[X] + random() * jitter_size, 
+                                           start[Y] + random() * jitter_size,
+                                           default_radius, 5.0]))
         print(npoints)
         stall_count = 0
-        while np.sqrt(np.sum(points[npoints-1][:R]**2)) < default_radius*2:
+        while np.sqrt(np.sum((points[npoints-1][:R] - start)**2)) < default_radius*2:
 
             stall_count += 1
             if stall_count >= stall:
@@ -80,6 +108,7 @@ def run(iterations, npoints, points):
                 points[i][Y] += 0.05
 
             iterate(npoints, points)
+            #print(points[0:npoints,M])
 
             constrain_on = True
             if constrain_on:
@@ -87,10 +116,16 @@ def run(iterations, npoints, points):
                 cx = 0.
                 cy = 0.
                 for i in range(const_iterations):
-                    constrain(npoints, points, constrain_circular, np.array([cx, cy, 100.], dtype='float64'))
+                    constrain(npoints, points, constrain_circular)
 
-            if npoints > 2 and not LineString(points[:npoints,:R]).is_simple:
-                return npoints
+#            if npoints > 2 and not LineString(points[:npoints,:R]).is_simple:
+#                return npoints
+
+    tot = 0
+    for i in range(npoints):
+        if points[i][M] > 0:
+            tot += 1
+    print(tot)
 
     return npoints
 
@@ -133,10 +168,10 @@ def draw(npoints, points, frame):
 
 def main():
     array_len = 5000
-    points = np.zeros((array_len,3), dtype=np.float64)
+    points = np.zeros((array_len,4), dtype=np.float64)
     npoints = 0
 
-    iterations = 700
+    iterations = 100
     frames = 1
     for i in range(frames):
         npoints = run(iterations, npoints, points)
