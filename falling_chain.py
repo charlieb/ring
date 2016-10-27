@@ -7,9 +7,7 @@ import svgwrite as svg
 X = 0
 Y = 1
 R = 2
-M = 3 # movement - used to track how much they shift so they can be disabled
 default_radius = 2.
-
 
 constrain_circular = 1
 constrain_rect = 2
@@ -26,7 +24,6 @@ def constrain(npoints, points, mode):
                 dmag = sqrt(dmag)
                 p[X] = cx + r * dx / dmag
                 p[Y] = cy + r * dy / dmag
-                #p[M] = 0 # fix points that have been constrained
 
 @jit(int64(int64, float64[:,:], float64[:]), nopython=True)
 def insert(npoints, points, starting_coords):
@@ -37,7 +34,7 @@ def insert(npoints, points, starting_coords):
 interpenetration_margin = 0.2
 max_tries = 100
 disable_threshold = 0.01
-@jit((int64, float64[:,:]))#, nopython=True)
+@jit((int64, float64[:,:]), nopython=True)
 def iterate(npoints, points):
     exclusion_complete = False
     tries = 0
@@ -47,9 +44,6 @@ def iterate(npoints, points):
 
         for i1 in range(npoints):
             for i2 in range(i1+1, npoints):
-                if points[i1][M] < disable_threshold and points[i2][M] < disable_threshold:
-                    #print('.', end='')
-                    continue
 
                 delta = points[i1][:R] - points[i2][:R]
                 d = sqrt(np.sum(delta**2))
@@ -60,20 +54,8 @@ def iterate(npoints, points):
                         m = d - (points[i1][R] + points[i2][R])
                         mv = (delta / d) * m / 2.
                         m = abs(m)
-                        if points[i1][M] < disable_threshold:
-                            points[i2][:R] += mv * 2.
-                            if tries == 1 and abs(i1 - i2) != 1:
-                                points[i2][M] = m
-                        elif points[i2][M] < disable_threshold:
-                            points[i1][:R] -= mv
-                            if tries == 1 and abs(i1 - i2) != 1:
-                                points[i1][M] = m
-                        else:
-                            points[i1][:R] -= mv
-                            points[i2][:R] += mv
-                            if tries == 1 and abs(i1 - i2) != 1:
-                                points[i1][M] = m
-                                points[i2][M] = m
+                        points[i1][:R] -= mv
+                        points[i2][:R] += mv
 
                         # record movement
 
@@ -83,7 +65,7 @@ def iterate(npoints, points):
 
 from shapely.geometry import Point, Polygon, LinearRing, LineString
 
-@jit(int64(int64, int64, float64[:,:]))#, nopython=True)
+@jit(int64(int64, int64, float64[:,:]), nopython=True)
 def run(iterations, npoints, points):
     jitter_size = 0.01
     
@@ -95,7 +77,7 @@ def run(iterations, npoints, points):
         #npoints = insert(npoints, points, [random() * jitter_size, random() * jitter_size, default_radius])
         npoints = insert(npoints, points, np.array([start[X] + random() * jitter_size, 
                                            start[Y] + random() * jitter_size,
-                                           default_radius, 5.0]))
+                                           default_radius]))
         print(npoints)
         stall_count = 0
         while np.sqrt(np.sum((points[npoints-1][:R] - start)**2)) < default_radius*2:
@@ -108,7 +90,6 @@ def run(iterations, npoints, points):
                 points[i][Y] += 0.05
 
             iterate(npoints, points)
-            #print(points[0:npoints,M])
 
             constrain_on = True
             if constrain_on:
@@ -121,11 +102,6 @@ def run(iterations, npoints, points):
 #            if npoints > 2 and not LineString(points[:npoints,:R]).is_simple:
 #                return npoints
 
-    tot = 0
-    for i in range(npoints):
-        if points[i][M] > 0:
-            tot += 1
-    print(tot)
 
     return npoints
 
@@ -168,10 +144,10 @@ def draw(npoints, points, frame):
 
 def main():
     array_len = 5000
-    points = np.zeros((array_len,4), dtype=np.float64)
+    points = np.zeros((array_len,3), dtype=np.float64)
     npoints = 0
 
-    iterations = 100
+    iterations = 1000
     frames = 1
     for i in range(frames):
         npoints = run(iterations, npoints, points)
